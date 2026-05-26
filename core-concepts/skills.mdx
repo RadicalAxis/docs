@@ -1,0 +1,160 @@
+# Skills
+
+Reusable capabilities your agents compose. Each skill is a `SKILL.md` file containing a name, a description, and instructions — optionally bundled with scripts or reference files.
+
+Ren loads only the **name** and **description** at startup. The full instructions load only when a task matches the skill's description.
+
+**Hierarchy:** Pod → Project → Agent → Skill
+
+Skills version independently from agents. One agent can use multiple skills. A skill can be shared across agents in the same project. Ren's public registry has 50+ skills, covering GitHub PR review, slide decks, web scraping, and more.
+
+---
+
+## Authentication
+
+Ren uses personal access tokens for authentication. Generate one from your account settings and pass it when initialising the SDK client. All operations are scoped to your pod.
+
+```js
+import { Ren } from '@ren-ai/sdk'
+
+const client = new Ren({
+  token: process.env.REN_API_TOKEN,
+})
+```
+
+Some skills need third-party credentials. Store them in the **Vault**. Ren injects them at runtime as environment variables — for example, the `google-workspace` skill reads `$MCP_GOOGLE_WORKSPACE_ACCESS_TOKEN`. Each skill's page on renai.build/skills lists which environment variables it expects.
+
+---
+
+## What is a Skill
+
+Each skill is a `SKILL.md` file containing a name, description, and instructions, optionally bundled with scripts or reference files.
+
+```md
+---
+name: processing-invoices
+description: Extracts line items, totals, and vendor details from invoice PDFs.
+  Use when the user uploads an invoice or asks to process billing documents.
+---
+
+## Extract fields
+
+Run `python scripts/extract.py invoice.pdf` → outputs `fields.json`.
+
+## Validate
+
+Run `python scripts/validate.py fields.json`. Fix any errors before continuing.
+
+## Scanned invoices
+
+For image-only PDFs with no embedded text: see [SCANNED.md](SCANNED.md).
+```
+
+---
+
+## Create, Update, Delete
+
+Creating a skill is two steps: first create the skill record to get an ID, then add content via a version.
+
+```js
+const { data: skill } = await client.skill.create()
+
+const { data: version } = await client.skill.version.create({
+  path: { skillId: skill.id },
+  // SKILL.md content and any bundled files
+})
+```
+
+To start from the registry, use `client.skill.copy(registrySkillId)`. Your fork is independent from the original.
+
+```js
+const { data: skill } = await client.skill.copy({
+  body: { skillId: 'registry-skill-id' },
+})
+```
+
+Updates create a new version — the previous version stays available. To delete a skill, remove all its versions first. Deleting a skill with active versions returns an error.
+
+```js
+const { data: versions } = await client.skill.version.list({
+  path: { skillId: skill.id },
+})
+
+for (const version of versions) {
+  await client.skill.version.delete({
+    path: { skillId: skill.id, versionId: version.id },
+  })
+}
+
+await client.skill.delete({ path: { skillId: skill.id } })
+```
+
+---
+
+## Version Control
+
+Every `skill.version.create()` call produces a new immutable version. Nothing is overwritten. Agents reference a specific version ID, so updates don't take effect until you change the reference.
+
+Use `"latest"` during development. In production, pin to a specific version ID so a skill update doesn't affect running agents.
+
+```js
+// development — always latest
+await client.agent.update({
+  path: { agentId },
+  body: {
+    skills: [{ skillId: skill.id, version: 'latest' }],
+  },
+})
+
+// production — pinned to v2
+await client.agent.update({
+  path: { agentId },
+  body: {
+    skills: [{ skillId: skill.id, version: '2' }],
+  },
+})
+```
+
+To roll back, point the agent to a previous version. Previous versions stay available until deleted.
+
+---
+
+## Writing Good Skills
+
+### Name
+
+Lowercase, hyphens only, max 64 characters. Use gerund form. Must match the folder name.
+
+- ✓ `processing-invoices`
+- ✓ `reviewing-prs`
+
+### Description
+
+Third person, one sentence. Include what it does and when to use it. This is the only thing the agent reads before deciding to load the skill.
+
+- ✓ **Good:** `"Reviews GitHub pull requests. Use when asked to review a PR or leave inline comments."`
+- ✗ **Bad:** `"Helps with GitHub"` or `"I can review PRs"`
+
+### Body
+
+Only include what the agent doesn't already know. Keep it under 500 lines — link out to reference files beyond that.
+
+- All links from `SKILL.md` should be one level deep. Don't nest.
+- Pick one word per concept and use it throughout.
+- For multi-step tasks, add a checklist.
+- For anything that can fail, add a `validate → fix → repeat` loop.
+
+> **Tip:** Use the `skill-dev` registry skill to generate a first draft. Describe what the skill should do and it scaffolds the `SKILL.md` for you.
+
+---
+
+## Registry
+
+| Registry  | URL                          | Notes                                  |
+|-----------|------------------------------|----------------------------------------|
+| Ren official | renai.build/skills        | 50+ skills, Ren-hosted                 |
+| Community | agentskills.io               | Works across Cursor, Copilot, Gemini CLI |
+
+Fork any skill into your pod with `client.skill.copy`. To publish your own, follow the guide at renai.build/docs/guides/publishing.
+
+Skills written in the standard `SKILL.md` format also work in Cursor, GitHub Copilot, OpenCode, and Gemini CLI.
